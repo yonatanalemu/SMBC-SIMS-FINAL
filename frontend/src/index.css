@@ -1,0 +1,67 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply font-sans text-ink bg-paper dark:bg-paper-dark dark:text-slate-100;
+  }
+  h1, h2, h3 {
+    @apply font-display;
+  }
+  ::selection {
+    @apply bg-teal-100 text-teal-600;
+  }
+}
+
+@layer utilities {
+  .id-chip {
+    @apply font-mono text-xs tracking-wide bg-navy-950/5 dark:bg-white/10 px-2 py-0.5 rounded;
+  }
+  .status-pill {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium;
+  }
+}
+/* ---------------------------------------------------------------------
+   Print / PDF export stylesheet — shared by every printable document in
+   the app (grade sheets, transcripts, student population reports).
+   Applies on-screen too (borders/padding/collapse), not just at print
+   time, so the in-app preview matches the printed output exactly. Only
+   page-break avoidance is print-specific in effect (it's a no-op on
+   screen). Honored by the native "Print" flow (window.print); NOT
+   honored by the "Download PDF" (html2canvas) flow, which rasterizes the
+   whole document into one image and can't respect CSS page breaks at
+   all — use Print → "Save as PDF" when exact page breaks matter.
+   --------------------------------------------------------------------- */
+@page {
+  size: A4 portrait;
+  margin: 12mm 10mm 15mm 10mm;
+}
+
+.print-table {
+  width: 100%;
+  box-sizing: border-box;
+  border-collapse: collapse;
+}
+.print-table th,
+.print-table td {
+  border: 1px solid #000;
+  padding: 5px 4px;
+  box-sizing: border-box;
+}
+.print-table thead {
+  display: table-header-group;
+}
+.print-table tbody {
+  display: table-row-group;
+}
+.print-table tr {
+  page-break-inside: avoid !important;
+  break-inside: avoid !important;
+}
+
+.signature-block {
+  page-break-inside: avoid !important;
+  break-inside: avoid !important;
+  margin-top: 20px;
+}

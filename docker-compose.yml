@@ -1,0 +1,39 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-change-me-access}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-change-me-refresh}
+      ACCESS_TOKEN_TTL: 15m
+      REFRESH_TOKEN_TTL: 7d
+      PORT: 4000
+      UPLOAD_DIR: /app/uploads
+      CONTENT_DIR: /app/content
+      SEED_ADMIN_USERNAME: ${SEED_ADMIN_USERNAME:-}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}
+      SEED_REGISTRAR_USERNAME: ${SEED_REGISTRAR_USERNAME:-}
+      SEED_REGISTRAR_PASSWORD: ${SEED_REGISTRAR_PASSWORD:-}
+      SEED_FINANCE_USERNAME: ${SEED_FINANCE_USERNAME:-}
+      SEED_FINANCE_PASSWORD: ${SEED_FINANCE_PASSWORD:-}
+    volumes:
+      - uploads_data:/app/uploads
+      - ./backend/content:/app/content
+    ports:
+      - "4000:4000" # handy for local testing/curl; the frontend reaches it via the Docker network either way
+
+  web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+
+volumes:
+  uploads_data:

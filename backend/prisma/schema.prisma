@@ -1,0 +1,505 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+enum Role {
+  admin
+  registrar
+  finance
+  dept_head
+  teacher
+  student
+}
+
+enum Track {
+  tvet
+  degree
+}
+
+enum StudentRecordStatus {
+  interim // just registered, "N-" prefix, pending Finance+Registrar approval
+  active
+  graduated // finished Level 4 (TVET) or Year 4 (Degree) — archived to Records
+}
+
+enum ProgramType {
+  level4_eligible // registers as Level 4 track
+  level2_terminal // registers as Level 2 Terminal
+}
+
+enum AdmissionClassification {
+  regular
+  extension
+}
+
+enum CertificateType {
+  original
+  temporary
+  // "terminal" removed — Level 2 Terminal students (Accounting/HRM) are not
+  // eligible for certificate generation at all; see structure.routes.js's
+  // certificate-template-for-student endpoint.
+}
+
+enum GradeStatus {
+  pending_dept_head
+  rejected_by_dept_head // still editable by teacher, then resets to pending_dept_head
+  pending_admin // dept head approved, waiting on Admin
+  approved // Admin approved — visible to Registrar, editable by Admin only
+}
+
+enum CourseStatus {
+  ongoing
+  completed
+}
+
+enum ExamStatus {
+  pending_dept_head
+  rejected_by_dept_head
+  pending_admin
+  rejected_by_admin
+  approved
+}
+
+enum InvoiceStatus {
+  unpaid
+  paid
+}
+
+enum PaymentProofStatus {
+  pending
+  verified
+  rejected
+}
+
+enum ScheduleType {
+  teaching
+  exam
+}
+
+enum TransactionMethod {
+  ebirr
+}
+
+// ============================================================
+// CORE IDENTITY
+// ============================================================
+
+model User {
+  id                 String    @id @default(uuid())
+  username           String    @unique // permanent: set by Admin. temporary: system-generated (STU-0001, TCR-001, DHD-001)
+  passwordHash       String
+  fullName           String?
+  email              String?
+  phone              String?
+  role               Role
+  mustChangePassword Boolean   @default(true)
+  isActive           Boolean   @default(true)
+  // Bumped whenever this account's password changes (self-service change,
+  // or an Admin/Registrar reset) — embedded in every refresh token, checked
+  // on every POST /auth/refresh (see auth.routes.js). A mismatch means the
+  // token predates the password change and is rejected, which is what
+  // forces every other logged-in session/device to actually be logged out
+  // rather than silently continuing on its still-valid refresh token.
+  tokenVersion       Int       @default(0)
+  createdById        String?
+  createdAt          DateTime  @default(now())
+
+  // When a Dept Head account is created from an existing Teacher (per spec,
+  // only teachers are eligible), this points back to that Teacher's own
+  // separate account/username — they hold two distinct logins.
+  promotedFromId String?
+  promotedFrom   User?   @relation("PromotedFrom", fields: [promotedFromId], references: [id])
+  promotedTo     User[]  @relation("PromotedFrom")
+
+  staffProfile   StaffProfile?
+  studentProfile Student?
+
+  taughtCourses       Course[]           @relation("CourseTeacher")
+  submittedGrades     Grade[]            @relation("GradeSubmittedBy")
+  deptHeadGradeDecisions Grade[]         @relation("GradeDeptHeadDecision")
+  adminGradeDecisions Grade[]            @relation("GradeAdminDecision")
+  submittedExams      Exam[]             @relation("ExamSubmittedBy")
+  examDecisions       Exam[]             @relation("ExamDeptHeadDecision")
+  examAdminDecisions  Exam[]             @relation("ExamAdminDecision")
+  attendanceSessions  AttendanceSession[] @relation("AttendanceTeacher")
+  createdInvoices     Invoice[]          @relation("InvoiceCreatedBy")
+  recordedTransactions Transaction[]     @relation("TransactionRecordedBy")
+  verifiedPaymentProofs PaymentProof[]   @relation("ProofVerifiedBy")
+  createdNews         News[]             @relation("NewsCreatedBy")
+  createdSchedules    Schedule[]         @relation("ScheduleCreatedBy")
+
+  @@index([role])
+}
+
+// Staff profile covers Teacher and Dept Head (Dept Head is a teacher granted
+// department oversight — role flips to dept_head but they remain listed as
+// staff so Admin's "assign a teacher as Dept Head" dropdown works off Users
+// where role = teacher).
+model StaffProfile {
+  id           String     @id @default(uuid())
+  userId       String     @unique
+  user         User       @relation(fields: [userId], references: [id])
+  departmentId String
+  department   Department @relation(fields: [departmentId], references: [id])
+
+  @@index([departmentId])
+}
+
+model Student {
+  id             String              @id @default(uuid())
+  userId         String              @unique
+  user           User                @relation(fields: [userId], references: [id])
+  departmentId   String
+  department     Department          @relation(fields: [departmentId], references: [id])
+  levelId        String
+  level          Level               @relation(fields: [levelId], references: [id])
+  track          Track
+  programType    ProgramType?        // TVET only
+  recordStatus   StudentRecordStatus @default(interim)
+  tuitionStatus  InvoiceStatus       @default(unpaid) // overall monthly tuition — distinct from itemized Invoices
+  tuitionPaidUntil DateTime?         // once paid, tuition isn't asked for again until this date passes
+
+  sex            String?
+  age            Int?
+  dateOfBirth    DateTime?
+  placeOfBirth   String?
+  nationality    String?
+  guardianName   String?
+  grandfatherName String? // for the Degree transcript's "Grand Father Name" line (Ethiopian
+                           // naming convention: given name + father's name + grandfather's name)
+  poBox          String?
+  residence      String?
+  esclceGpa      String?
+  nationalId     String?
+  photoUrl       String?
+  fullNameAmharic String?  // for certificate generation
+  admissionClassification AdmissionClassification? // Degree only — Regular vs Extension
+
+  admissionYear  Int?
+  courseStartDate DateTime? // for certificate generation (G.C. — Ethiopian equivalent computed client-side)
+                             // also used as the Degree transcript's "Admission Date"
+  courseEndDate   DateTime?
+
+  grades         Grade[]
+  attendance     AttendanceRecord[]
+  invoices       Invoice[]
+  paymentProofs  PaymentProof[]
+  transactions   Transaction[]
+
+  createdAt      DateTime            @default(now())
+
+  @@index([departmentId])
+  @@index([levelId])
+  @@index([recordStatus])
+}
+
+// ============================================================
+// ACADEMIC STRUCTURE
+// ============================================================
+
+model Department {
+  id    String @id @default(uuid())
+  name  String @unique
+  track Track
+
+  levels   Level[]
+  staff    StaffProfile[]
+  students Student[]
+  schedules Schedule[]
+  curricula Curriculum[]
+  certificateTemplates CertificateTemplate[]
+
+  @@index([track])
+}
+
+// Covers both TVET levels (Level 2/3/4) and Degree year+semester
+// (e.g. "Nursing Year I Semester I") or plain degree department-level entries
+// for the 3 non-nursing degree tracks.
+model Level {
+  id           String     @id @default(uuid())
+  departmentId String
+  department   Department @relation(fields: [departmentId], references: [id])
+  name         String     // e.g. "Level 3", "Year I Semester I"
+  order        Int        @default(0)
+
+  courses  Course[]
+  students Student[]
+  curricula Curriculum[]
+
+  @@unique([departmentId, name])
+  @@index([departmentId])
+}
+
+model Course {
+  id        String  @id @default(uuid())
+  levelId   String
+  level     Level   @relation(fields: [levelId], references: [id])
+  name      String
+  code      String? // TVET: full unit-competency code e.g. "LSA HRM2 01 1221".
+                     // Degree: just the course-code prefix e.g. "BUMA" (paired with courseNo).
+  courseNo  String? // Degree only — the course number e.g. "201" (shown as a separate
+                     // transcript column from `code`, per the official Degree transcript format).
+  creditHours Int?  // Degree only — credit hours for this course, needed for the
+                     // transcript's "Cr. Hrs" column and (later) GPA calculation.
+  teacherId String?
+  teacher   User?   @relation("CourseTeacher", fields: [teacherId], references: [id])
+  // Set by the assigned teacher on their own Curriculum tab, visible to
+  // Admin on the Teachers page next to that teacher's course list. Purely
+  // informational — doesn't gate grading, locking, or any other workflow.
+  status    CourseStatus @default(ongoing)
+
+  grades Grade[]
+  exams  Exam[]
+
+  @@index([levelId])
+  @@index([teacherId])
+}
+
+model Curriculum {
+  id           String     @id @default(uuid())
+  departmentId String
+  department   Department @relation(fields: [departmentId], references: [id])
+  levelId      String
+  level        Level      @relation(fields: [levelId], references: [id])
+  fileUrl      String
+  uploadedAt   DateTime   @default(now())
+
+  @@index([departmentId])
+  @@index([levelId])
+}
+
+// ============================================================
+// GRADES — Teacher -> Dept Head -> Admin -> Registrar(read-only)
+// ============================================================
+
+model Grade {
+  id       String @id @default(uuid())
+  studentId String
+  student  Student @relation(fields: [studentId], references: [id])
+  courseId String
+  course   Course  @relation(fields: [courseId], references: [id])
+
+  // TVET only — Degree grades skip these entirely and go straight to
+  // letterGrade (see utils/degree-grade-scale.js). Nullable because of that.
+  theoryScore      Float? // 30%
+  practiceScore    Float? // 40%
+  cooperativeScore Float? // 30%
+  totalScore       Float? // computed, TVET only
+  letterGrade      String? // TVET: computed from Sitti's grade scale. Degree: set
+                            // directly by the teacher (A+, A, A-, B+, B, B-, C+, C,
+                            // C-, D, F, I, DO) — see utils/degree-grade-scale.js.
+
+  status GradeStatus @default(pending_dept_head)
+
+  submittedById String
+  submittedBy   User   @relation("GradeSubmittedBy", fields: [submittedById], references: [id])
+
+  deptHeadDecisionById String?
+  deptHeadDecisionBy   User?   @relation("GradeDeptHeadDecision", fields: [deptHeadDecisionById], references: [id])
+  deptHeadDecidedAt    DateTime?
+
+  adminDecisionById String?
+  adminDecisionBy   User?   @relation("GradeAdminDecision", fields: [adminDecisionById], references: [id])
+  adminDecidedAt    DateTime?
+
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@unique([studentId, courseId])
+  @@index([status])
+  @@index([studentId])
+  @@index([courseId])
+}
+
+// ============================================================
+// EXAMS — Teacher (PDF only) -> Dept Head -> Registrar (print)
+// ============================================================
+
+model Exam {
+  id       String @id @default(uuid())
+  courseId String
+  course   Course @relation(fields: [courseId], references: [id])
+
+  // Free text set by the teacher on submission, e.g. "2018 E.C. — Midterm
+  // Exam" — carries both the academic year and exam type through the whole
+  // Dept Head -> Admin -> Registrar chain; shown as a column at every stage.
+  // Defaulted to "" (not left nullable) so `prisma db push` can add this
+  // column without failing on any exams already sitting in the database —
+  // the API layer still requires a non-empty value for new submissions.
+  title String @default("")
+
+  fileUrl String // PDF only
+
+  status         ExamStatus @default(pending_dept_head)
+  rejectionNote  String?
+
+  submittedById String
+  submittedBy   User   @relation("ExamSubmittedBy", fields: [submittedById], references: [id])
+
+  deptHeadDecisionById String?
+  deptHeadDecisionBy   User?   @relation("ExamDeptHeadDecision", fields: [deptHeadDecisionById], references: [id])
+  deptHeadDecidedAt    DateTime?
+
+  adminDecisionById String?
+  adminDecisionBy   User?   @relation("ExamAdminDecision", fields: [adminDecisionById], references: [id])
+  adminDecidedAt    DateTime?
+
+  printedAt DateTime? // Registrar marks printed
+
+  createdAt DateTime @default(now())
+
+  @@index([status])
+  @@index([courseId])
+}
+
+// ============================================================
+// ATTENDANCE — digital, per department+level+teacher+date
+// ============================================================
+
+model AttendanceSession {
+  id             String     @id @default(uuid())
+  departmentId   String
+  levelId        String
+  teacherId      String
+  teacher        User       @relation("AttendanceTeacher", fields: [teacherId], references: [id])
+  instructorName String
+  date           DateTime
+
+  records AttendanceRecord[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([departmentId, levelId, teacherId, date])
+  @@index([departmentId])
+  @@index([levelId])
+}
+
+model AttendanceRecord {
+  id        String            @id @default(uuid())
+  sessionId String
+  session   AttendanceSession @relation(fields: [sessionId], references: [id])
+  studentId String
+  student   Student           @relation(fields: [studentId], references: [id])
+  present   Boolean
+
+  @@unique([sessionId, studentId])
+  @@index([studentId])
+}
+
+// ============================================================
+// FINANCE — invoices, tuition, payment proofs, daily transactions
+// ============================================================
+
+model Invoice {
+  id          String        @id @default(uuid())
+  studentId   String
+  student     Student       @relation(fields: [studentId], references: [id])
+  title       String
+  amount      Float
+  status      InvoiceStatus @default(unpaid)
+  createdById String
+  createdBy   User          @relation("InvoiceCreatedBy", fields: [createdById], references: [id])
+  createdAt   DateTime      @default(now())
+
+  @@index([studentId])
+  @@index([status])
+}
+
+model PaymentProof {
+  id             String              @id @default(uuid())
+  studentId      String
+  student        Student             @relation(fields: [studentId], references: [id])
+  screenshotUrls String[]            // multiple images per proof upload (was a single screenshotUrl)
+  periodMonth    String // e.g. "2026-07"
+  status         PaymentProofStatus  @default(pending)
+  verifiedById   String?
+  verifiedBy     User?               @relation("ProofVerifiedBy", fields: [verifiedById], references: [id])
+  uploadedAt     DateTime            @default(now())
+
+  @@index([studentId])
+  @@index([status])
+}
+
+model Transaction {
+  id           String             @id @default(uuid())
+  amount       Float
+  date         DateTime
+  method       TransactionMethod  @default(ebirr)
+  recordedById String
+  recordedBy   User               @relation("TransactionRecordedBy", fields: [recordedById], references: [id])
+  studentId    String?
+  student      Student?           @relation(fields: [studentId], references: [id])
+  note         String?
+  createdAt    DateTime           @default(now())
+
+  @@index([date])
+  @@index([studentId])
+}
+
+// ============================================================
+// SETTINGS — admin-editable config (invoice defaults, etc.)
+// ============================================================
+
+model Setting {
+  key   String @id
+  value String
+}
+
+// One template PNG per track (and optionally per department, for TVET where
+// each department has its own certificate design) — Admin uploads these;
+// generation overlays student name (English + Amharic) and start/end dates.
+// One PNG per (track, certificateType, department) — always department-specific,
+// since every department has its own certificate design. "terminal" only
+// applies to track=tvet, and in practice only gets used for Accounting/HRM
+// (the only departments with a Level 2 Terminal path).
+model CertificateTemplate {
+  id              String          @id @default(uuid())
+  track           Track
+  certificateType CertificateType
+  departmentId    String
+  department      Department      @relation(fields: [departmentId], references: [id])
+  imageUrl        String
+  uploadedAt      DateTime        @default(now())
+
+  @@unique([track, certificateType, departmentId])
+}
+
+// ============================================================
+// NEWS, SCHEDULES
+// ============================================================
+
+model News {
+  id          String   @id @default(uuid())
+  title       String
+  body        String
+  imageUrl    String?
+  isBreaking  Boolean  @default(false)
+  createdById String
+  createdBy   User     @relation("NewsCreatedBy", fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+}
+
+model Schedule {
+  id           String       @id @default(uuid())
+  departmentId String
+  department   Department   @relation(fields: [departmentId], references: [id])
+  type         ScheduleType
+  fileUrl      String
+  title        String?
+  createdById  String
+  createdBy    User         @relation("ScheduleCreatedBy", fields: [createdById], references: [id])
+  createdAt    DateTime     @default(now())
+
+  @@index([departmentId])
+  @@index([type])
+}
