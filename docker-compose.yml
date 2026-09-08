@@ -22,8 +22,6 @@ services:
     volumes:
       - uploads_data:/app/uploads
       - ./backend/content:/app/content
-    ports:
-      - "4000:4000" # handy for local testing/curl; the frontend reaches it via the Docker network either way
 
   web:
     build:
@@ -32,8 +30,6 @@ services:
     restart: unless-stopped
     depends_on:
       - backend
-    ports:
-      - "80:80"
 
 volumes:
   uploads_data:
