@@ -11,12 +11,11 @@ RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists
 RUN chown -R node:node /app
 USER node
 
-COPY --chown=node:node package*.json ./
-COPY --chown=node:node prisma ./prisma/
+COPY --chown=node:node backend/package*.json ./
+COPY --chown=node:node backend/prisma ./prisma/
 RUN npm install
 
-COPY --chown=node:node content ./content
-COPY --chown=node:node . .
+COPY --chown=node:node backend/ .
 RUN npx prisma generate
 
 RUN mkdir -p /app/uploads
