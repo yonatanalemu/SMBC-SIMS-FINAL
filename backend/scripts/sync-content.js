@@ -3,7 +3,7 @@ import fs from "fs";
 import path from "path";
 import prisma from "../src/config/prisma.js";
 
-const CONTENT_DIR = path.join(process.cwd(), "content");
+const CONTENT_DIR = path.join(__dirname, "../content");
 const CURRICULUM_DIR = path.join(CONTENT_DIR, "curriculum");
 
 function listFiles(dir, ext) {
