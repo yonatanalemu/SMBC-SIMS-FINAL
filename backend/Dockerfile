@@ -15,7 +15,6 @@ COPY --chown=node:node package*.json ./
 COPY --chown=node:node prisma ./prisma/
 RUN npm install
 
-COPY --chown=node:node content ./curriculum
 COPY --chown=node:node . .
 
 USER root
