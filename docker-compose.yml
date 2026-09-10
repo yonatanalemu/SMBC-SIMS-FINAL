@@ -21,8 +21,7 @@ services:
       SEED_FINANCE_PASSWORD: ${SEED_FINANCE_PASSWORD:-}
     volumes:
       - uploads_data:/app/uploads
-      - ./backend/content:/app/content
-
+      
   web:
     build:
       context: .
